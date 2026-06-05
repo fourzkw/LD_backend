@@ -1,0 +1,15 @@
+flask
+python-dotenv
+pymongo
+bcrypt
+PyJWT
+volcengine-python-sdk[ark]
+httpx
+pydantic
+numpy
+pandas
+joblib
+torch
+tsfel
+scikit-learn
+websockets
