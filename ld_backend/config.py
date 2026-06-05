@@ -32,7 +32,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 # MongoDB
-MONGO_URI = os.environ.get("MONGO_URI", "")
+MONGO_URI = (os.environ.get("MONGO_URI") or "mongodb://127.0.0.1:27017").strip()
 MONGO_SERVER_SELECTION_MS = int(os.environ.get("MONGO_SERVER_SELECTION_MS", "5000"))
 MONGO_DB = os.environ.get("MONGO_DB", "ld_backend")
 MONGO_USERNAME = os.environ.get("MONGO_USERNAME", "").strip()
@@ -54,6 +54,7 @@ JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
 MAX_PET_IMAGE_CHARS = int(os.environ.get("MAX_PET_IMAGE_CHARS", "2500000"))
 
 # Inference / server
+HOST = os.environ.get("HOST", "0.0.0.0").strip() or "0.0.0.0"
 PORT = int(os.environ.get("PORT", "5000"))
 MODEL_DIR = os.environ.get("MODEL_DIR") or None
 STRIDE = int(os.environ.get("STRIDE", "25"))

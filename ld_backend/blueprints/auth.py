@@ -10,7 +10,7 @@ import jwt
 from flask import Blueprint, jsonify, request
 from pymongo.errors import DuplicateKeyError, PyMongoError, ServerSelectionTimeoutError
 
-from ld_backend.config import JWT_EXPIRE_DAYS, JWT_SECRET, MAX_PET_IMAGE_CHARS
+from ld_backend.config import JWT_EXPIRE_DAYS, JWT_SECRET
 from ld_backend.db.mongo import ensure_user_indexes, users_collection
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
@@ -51,8 +51,6 @@ def _issue_token(phone: str) -> str:
 def _public_user(doc: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "phone": doc.get("phone", ""),
-        "pet_name": doc.get("pet_name", ""),
-        "pet_image": doc.get("pet_image", ""),
     }
 
 
@@ -84,23 +82,17 @@ def register():
     body = request.get_json(silent=True) or {}
     phone = (body.get("phone") or "").strip()
     password = body.get("password") or ""
-    pet_name = (body.get("pet_name") or "").strip()
-    pet_image = body.get("pet_image") or ""
 
-    if not phone or not password or not pet_name or not pet_image:
+    if not phone or not password:
         return _json_error(400, "missing_fields", 400)
     if not PHONE_RE.match(phone):
         return _json_error(400, "invalid_phone", 400)
     if len(password) < 6:
         return _json_error(400, "password_too_short", 400)
-    if len(pet_image) > MAX_PET_IMAGE_CHARS:
-        return _json_error(400, "pet_image_too_large", 400)
 
     doc = {
         "phone": phone,
         "password_hash": _hash_password(password),
-        "pet_name": pet_name,
-        "pet_image": pet_image,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     try:

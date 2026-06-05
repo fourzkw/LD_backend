@@ -23,9 +23,11 @@ except ImportError:  # pragma: no cover - exercised only when dependency is miss
 
 logger = logging.getLogger(__name__)
 
+GLOBAL_DEVICE_KEY = "__global__"
+
 _lock = threading.Lock()
 _started = False
-_latest_result: Optional[Dict[str, Any]] = None
+_latest_by_device: Dict[str, Dict[str, Any]] = {}
 _connection_status: Dict[str, Any] = {
     "enabled": CLOUD_RESULT_WS_ENABLED,
     "connected": False,
@@ -49,6 +51,11 @@ def _coerce_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _storage_key(device_id: Optional[str]) -> str:
+    key = (device_id or "").strip()
+    return key if key else GLOBAL_DEVICE_KEY
+
+
 def _normalise_result(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if data.get("type") != "inference_result":
         return None
@@ -62,6 +69,7 @@ def _normalise_result(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     timestamp = _coerce_float(data.get("timestamp"), time.time())
     behaviour = str(data.get("behaviour") or "Unknown")
     confidence = _coerce_float(data.get("confidence"), 0.0)
+    device_id = (data.get("device_id") or data.get("deviceId") or "").strip() or None
 
     return {
         "type": "inference_result",
@@ -69,28 +77,39 @@ def _normalise_result(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "behaviour": behaviour,
         "confidence": round(confidence, 4),
         "details": details,
+        "device_id": device_id,
     }
 
 
 def update_cloud_result(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Store a cloud inference result and return the normalized payload."""
-    global _latest_result
-
     result = _normalise_result(data)
     if result is None:
         return None
 
+    storage_key = _storage_key(result.get("device_id"))
     received_at = time.time()
     with _lock:
-        _latest_result = dict(result)
+        _latest_by_device[storage_key] = dict(result)
         _connection_status["last_message_at"] = received_at
         _connection_status["last_error"] = ""
     return result
 
 
-def get_cloud_public_status() -> Dict[str, Any]:
+def _lookup_latest(device_id: Optional[str]) -> Optional[Dict[str, Any]]:
     with _lock:
-        latest = dict(_latest_result) if _latest_result else None
+        if device_id:
+            specific = _latest_by_device.get(device_id)
+            if specific is not None:
+                return dict(specific)
+        global_result = _latest_by_device.get(GLOBAL_DEVICE_KEY)
+        return dict(global_result) if global_result is not None else None
+
+
+def get_cloud_public_status(device_id: Optional[str] = None) -> Dict[str, Any]:
+    device_id = (device_id or "").strip() or None
+    latest = _lookup_latest(device_id)
+    with _lock:
         status = dict(_connection_status)
     if not status.get("url"):
         status["url"] = _ws_url()
@@ -143,12 +162,6 @@ async def _subscribe_loop(ws_url: str, reconnect_delay: float) -> None:
                     if result is None:
                         logger.warning("Ignored cloud message with unexpected type: %s", data)
                         continue
-
-                    # logger.info(
-                    #     "Cloud inference result received: behaviour=%s confidence=%.4f",
-                    #     result.get("behaviour", ""),
-                    #     result.get("confidence", 0.0),
-                    # )
         except asyncio.CancelledError:
             raise
         except Exception as exc:

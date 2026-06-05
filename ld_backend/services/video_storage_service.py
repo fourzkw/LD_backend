@@ -23,8 +23,8 @@ def _safe_segment(value: str) -> str:
     return cleaned or "unknown"
 
 
-def relative_video_key(phone: str, state: str) -> str:
-    return f"{_safe_segment(phone)}/{_safe_segment(state)}.mp4"
+def relative_video_key(device_id: str, state: str) -> str:
+    return f"{_safe_segment(device_id)}/{_safe_segment(state)}.mp4"
 
 
 def absolute_video_path(relative_key: str) -> Path:
@@ -35,8 +35,8 @@ def absolute_video_path(relative_key: str) -> Path:
     return path
 
 
-def local_video_path(phone: str, state: str) -> Path:
-    return absolute_video_path(relative_video_key(phone, state))
+def local_video_path(device_id: str, state: str) -> Path:
+    return absolute_video_path(relative_video_key(device_id, state))
 
 
 def video_file_ready(relative_key: Optional[str]) -> bool:
@@ -47,22 +47,22 @@ def video_file_ready(relative_key: Optional[str]) -> bool:
     return path.is_file() and path.stat().st_size > 0
 
 
-def delete_local_video(phone: str, state: str) -> None:
-    path = local_video_path(phone, state)
+def delete_local_video(device_id: str, state: str) -> None:
+    path = local_video_path(device_id, state)
     try:
         if path.is_file():
             path.unlink()
-            logger.info("Deleted cached video phone=%s state=%s", phone, state)
+            logger.info("Deleted cached video device_id=%s state=%s", device_id, state)
     except OSError:
-        logger.exception("Failed to delete cached video phone=%s state=%s", phone, state)
+        logger.exception("Failed to delete cached video device_id=%s state=%s", device_id, state)
 
 
-def download_remote_video(remote_url: str, phone: str, state: str) -> str:
+def download_remote_video(remote_url: str, device_id: str, state: str) -> str:
     url = (remote_url or "").strip()
     if not url:
         raise VideoStorageError("missing_video_url")
 
-    dest = local_video_path(phone, state)
+    dest = local_video_path(device_id, state)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = dest.with_suffix(".mp4.part")
 
@@ -85,10 +85,10 @@ def download_remote_video(remote_url: str, phone: str, state: str) -> str:
             except OSError:
                 pass
 
-    rel = relative_video_key(phone, state)
+    rel = relative_video_key(device_id, state)
     logger.info(
-        "Cached generated video phone=%s state=%s bytes=%s",
-        phone,
+        "Cached generated video device_id=%s state=%s bytes=%s",
+        device_id,
         state,
         dest.stat().st_size,
     )

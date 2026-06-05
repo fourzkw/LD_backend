@@ -81,5 +81,26 @@ def video_tasks_collection() -> Collection[Any]:
 
 
 def ensure_video_task_indexes() -> None:
-    video_tasks_collection().create_index([("phone", 1), ("state", 1)], unique=True)
-    video_tasks_collection().create_index([("phone", 1), ("updated_at", -1)])
+    video_tasks_collection().create_index([("device_id", 1), ("state", 1)], unique=True)
+    video_tasks_collection().create_index([("device_id", 1), ("updated_at", -1)])
+
+
+def devices_collection() -> Collection[Any]:
+    return get_db()["devices"]
+
+
+def ensure_device_indexes() -> None:
+    devices_collection().create_index("device_id", unique=True)
+    devices_collection().create_index("pairing_code", unique=True, sparse=True)
+    devices_collection().create_index("phone")
+
+
+def touch_device_last_seen(device_id: str, when: str) -> None:
+    """Update last_seen_at for a registered device (best-effort)."""
+    try:
+        devices_collection().update_one(
+            {"device_id": device_id},
+            {"$set": {"last_seen_at": when}},
+        )
+    except Exception:
+        logging.exception("touch_device_last_seen device_id=%s", device_id)

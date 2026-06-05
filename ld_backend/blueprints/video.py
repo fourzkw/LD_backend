@@ -11,8 +11,9 @@ from flask import Blueprint, jsonify, request, send_file
 from pymongo.errors import PyMongoError, ServerSelectionTimeoutError
 
 from ld_backend.blueprints.auth import JWT_ALG, JWT_SECRET
+from ld_backend.blueprints.devices import device_owned_by, find_device_by_id
 from ld_backend.config import VIDEO_POLL_INTERVAL_SECONDS
-from ld_backend.db.mongo import ensure_video_task_indexes, users_collection, video_tasks_collection
+from ld_backend.db.mongo import ensure_video_task_indexes, video_tasks_collection
 from ld_backend.services.seedance_service import (
     SeedanceServiceError,
     create_video_task,
@@ -104,13 +105,14 @@ def _ensure_video_cached(task_doc: Dict[str, Any]) -> Dict[str, Any]:
         return task_doc
 
     phone = (task_doc.get("phone") or "").strip()
+    device_id = (task_doc.get("device_id") or "").strip()
     state = (task_doc.get("state") or "").strip()
-    if not phone or not state:
+    if not device_id or not state:
         return task_doc
 
     now = _utc_now()
     try:
-        rel_key = download_remote_video(remote_url, phone, state)
+        rel_key = download_remote_video(remote_url, device_id, state)
         update_fields: Dict[str, Any] = {
             "local_video_path": rel_key,
             "video_ready": True,
@@ -119,9 +121,9 @@ def _ensure_video_cached(task_doc: Dict[str, Any]) -> Dict[str, Any]:
         }
     except VideoStorageError as exc:
         logging.warning(
-            "Video cache failed task_id=%s phone=%s state=%s reason=%s",
+            "Video cache failed task_id=%s device_id=%s state=%s reason=%s",
             task_doc.get("task_id", ""),
-            phone,
+            device_id,
             state,
             str(exc),
         )
@@ -132,9 +134,9 @@ def _ensure_video_cached(task_doc: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception:
         logging.exception(
-            "Video cache failed task_id=%s phone=%s state=%s",
+            "Video cache failed task_id=%s device_id=%s state=%s",
             task_doc.get("task_id", ""),
-            phone,
+            device_id,
             state,
         )
         update_fields = {
@@ -187,6 +189,7 @@ def _poll_pending_tasks_once() -> None:
                 "task_id": 1,
                 "status": 1,
                 "phone": 1,
+                "device_id": 1,
                 "state": 1,
                 "video_url": 1,
                 "video_ready": 1,
@@ -208,9 +211,9 @@ def _poll_pending_tasks_once() -> None:
             after_ready = bool(latest.get("video_ready"))
             if after_status != before_status or after_ready != before_ready:
                 logging.info(
-                    "Video task updated task_id=%s phone=%s state=%s status=%s->%s ready=%s->%s",
+                    "Video task updated task_id=%s device_id=%s state=%s status=%s->%s ready=%s->%s",
                     task_id,
-                    task_doc.get("phone", ""),
+                    task_doc.get("device_id", ""),
                     task_doc.get("state", ""),
                     before_status,
                     after_status,
@@ -243,6 +246,18 @@ def start_video_task_poller() -> None:
         logging.info("Video task poller started (interval=%ss)", _poller_interval_seconds)
 
 
+def _resolve_device_id(phone: str, raw_device_id: str):
+    device_id = (raw_device_id or "").strip()
+    if not device_id:
+        return None, _json_error(400, "missing_device_id", 400)
+    if not device_owned_by(device_id, phone):
+        return None, _json_error(403, "not_owner", 403)
+    device = find_device_by_id(device_id)
+    if not device:
+        return None, _json_error(404, "device_not_found", 404)
+    return device, None
+
+
 @video_bp.post("/tasks")
 def create_task():
     phone = _extract_phone_from_request()
@@ -252,25 +267,25 @@ def create_task():
     body = request.get_json(silent=True) or {}
     state = (body.get("state") or "").strip()
     force = bool(body.get("force"))
+    device, err = _resolve_device_id(phone, body.get("device_id"))
+    if err is not None:
+        return err
     if not state:
         return _json_error(400, "missing_state", 400)
 
     try:
         _lazy_video_indexes()
-        user = users_collection().find_one({"phone": phone})
-        if not user:
-            return _json_error(404, "user_not_found", 404)
-
-        ref_image = user.get("pet_image", "")
+        device_id = device["device_id"]
+        ref_image = device.get("pet_image", "")
         if not ref_image:
             return _json_error(400, "missing_pet_image", 400)
         print(f"state: {state}")
         prompt = _default_prompt_for_state(state)
 
         tasks = video_tasks_collection()
-        existing = tasks.find_one({"phone": phone, "state": state})
+        existing = tasks.find_one({"device_id": device_id, "state": state})
         if force and existing:
-            delete_local_video(phone, state)
+            delete_local_video(device_id, state)
 
         if not force and existing and existing.get("status") == "succeeded" and existing.get("video_ready"):
             return jsonify(
@@ -301,6 +316,7 @@ def create_task():
         now = _utc_now()
         doc = {
             "phone": phone,
+            "device_id": device_id,
             "state": state,
             "prompt": prompt,
             "task_id": created["task_id"],
@@ -315,7 +331,7 @@ def create_task():
             "updated_at": now,
         }
         tasks.update_one(
-            {"phone": phone, "state": state},
+            {"device_id": device_id, "state": state},
             {"$set": doc},
             upsert=True,
         )
@@ -338,10 +354,16 @@ def get_task(state: str):
     state = (state or "").strip()
     if not state:
         return _json_error(400, "missing_state", 400)
+    device_id = (request.args.get("device_id") or "").strip()
+    device, err = _resolve_device_id(phone, device_id)
+    if err is not None:
+        return err
 
     try:
         _lazy_video_indexes()
-        task_doc = video_tasks_collection().find_one({"phone": phone, "state": state})
+        task_doc = video_tasks_collection().find_one(
+            {"device_id": device["device_id"], "state": state}
+        )
         if not task_doc:
             return _json_error(404, "task_not_found", 404)
         latest = _refresh_task_from_provider(task_doc)
@@ -364,10 +386,16 @@ def download_task_video(state: str):
     state = (state or "").strip()
     if not state:
         return _json_error(400, "missing_state", 400)
+    device_id = (request.args.get("device_id") or "").strip()
+    device, err = _resolve_device_id(phone, device_id)
+    if err is not None:
+        return err
 
     try:
         _lazy_video_indexes()
-        task_doc = video_tasks_collection().find_one({"phone": phone, "state": state})
+        task_doc = video_tasks_collection().find_one(
+            {"device_id": device["device_id"], "state": state}
+        )
         if not task_doc:
             return _json_error(404, "task_not_found", 404)
 
